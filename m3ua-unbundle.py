@@ -63,7 +63,7 @@ def remove_extra(chunk):
 def handle_packet(text2pcap_process, current_time, data, args):
     ''' handle packet '''
     data = data.split(' ')
-    
+
     if args['sll']:
         (sll_header, data) = extract_sll(data)
         if sll_header['sll.etype'] <> ['08', '00']:
@@ -72,13 +72,24 @@ def handle_packet(text2pcap_process, current_time, data, args):
             return data
     else:
         (ethernet_header, data) = extract_ethernet(data)
-        if ethernet_header['ip.type'] <> ['08', '00']:
+        if ethernet_header['ip.type'] == ['81', '00']:
+            args['vlan'] = True
+        elif ethernet_header['ip.type'] <> ['08', '00']:
             # raise RuntimeError('Unknown IP type: %s' % ethernet_header['ip.type'])
             # return data
             return
+
+    if args['vlan']:
+        (vlan_hdr, data) = extract_vlan(data)
+        if vlan_hdr['vlan.etype'] <> ['08', '00']:
+            print "Next level type is not expected: " 
+            #print vlan_hdr['vlan.etype']
+            #print vlan_hdr
+            return data
     
     (ipv4_header, data) = extract_ipv4(data)
     if ipv4_header['protocol'] <> PROTOCOLS['SCTP']:
+        print "Not an SCTP in IP header"
         # raise RuntimeError('Unknown protocol: %s' % ipv4_header['protocol'])
         # return data
         return 
@@ -96,6 +107,20 @@ def extract_ethernet(data):
     header['mac.source'] = data[6:12]
     header['ip.type'] = data[12:14]
     return (header, data[14:])
+
+def extract_vlan(data):
+    byte = int(data[0],16)
+    ''' extract vlan header data '''
+    #print 'Byte: [' + str( byte ) + ']: ' + data[0]
+    #print byte & 0xc0 >> 6
+
+    header = dict()
+    header['vlan.priority'] = (byte & 0xf0) >> 5
+    #header['vlan.dei'] = (byte & 0x10) >> 4
+    #header['vlan.id'] = byte & 0x0f + int(data[1],16)
+    header['vlan.etype'] = data[2:4]
+    return (header, data[4:])
+
 
 def extract_sll(data):
     ''' extract linux cooked capture header '''
@@ -155,6 +180,7 @@ def extract_sctp(text2pcap_process, current_time, data, args):
             if sctp_chunk['length'] == 0:
                 break
             # protocol payload identifier
+            print ( "Chunk len: ", sctp_chunk['length'] )
             payload_identifier = int(''.join(sctp_chunk['data'][12:16]), 16)
             if payload_identifier == 3: # M3UA
                 if (sctp_chunk['length'] - 16) < 8:  # small chunk
@@ -174,6 +200,12 @@ def extract_sctp(text2pcap_process, current_time, data, args):
                     payload = mtp3_hdr + payload
                 # return header, payload
                 save_data(text2pcap_process, current_time, payload)
+            elif payload_identifier == 5: # M2PA
+                if (sctp_chunk['length'] - 16) < 8:  # small chunk
+                    continue
+                payload = sctp_chunk['data'][16:sctp_chunk['length']] #remove sctp header
+                payload = payload[17:] #remove m2pa header
+                save_data(text2pcap_process, current_time, payload)
             else:
                 if sctp_chunk['length'] % 4 <> 0:
                     chunk_padding = 4 - sctp_chunk['length'] % 4
@@ -182,6 +214,7 @@ def extract_sctp(text2pcap_process, current_time, data, args):
 
 def extract_sctp_chunk(data):
     ''' extract sctp chunk data '''
+    print( "data size: ", len(data) )
     header = dict()
     header['type'] = int(data[0], 16)
     header['flags'] = data[1]
@@ -283,6 +316,7 @@ def m3ua_to_ansi_mtp3(m3ua_header):
 
 def save_data(process, current_time, data):
     ''' save data block to process '''
+    #print( 'Saving data size: ', len(data) )
 
     process.stdin.write('%s\n' % current_time)  
     row_id = 0
@@ -312,6 +346,7 @@ def unbundling(tshark_process, text2pcap_process, args):
         if tshark_line and tshark_line[-1] == '\r':
             tshark_line = tshark_line[:-1]
                 
+        #print tshark_line;
         if tshark_line:
             data_block.append(tshark_line)
         else:
@@ -339,13 +374,17 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='m3ua unbundle')
     parser.add_argument('--filter', action='store', help='wireshark filter')
     parser.add_argument('-s', '--sll', action='store_true', help='Linux cooked-mode capture (SLL)')
+    parser.add_argument('-v', '--vlan', action='store_true', help='Vlan present or not')
     parser.add_argument('-a', '--ansi', action='store_true', help='ANSI MTP3')
     parser.add_argument('source', action='store', help='source pcap file')
     parser.add_argument('result', action='store', help='result pcap file')
     args = parser.parse_args()
+
+    #print "Arguments:"
+    print args
     
     # tshark
-    tshark_args = ['tshark', '-x', '-te', '-r', args.source]
+    tshark_args = ['tshark', '-P', '-x', '-te', '-r', args.source]
     if args.filter:
         tshark_args.append(args.filter)
     tshark_process = subprocess.Popen(  tshark_args, 
