@@ -387,16 +387,18 @@ if __name__ == '__main__':
     tshark_args = ['tshark', '-P', '-x', '-te', '-r', args.source]
     if args.filter:
         tshark_args.append(args.filter)
+    print( "tshark: " + str(' '.join(tshark_args) ) )
     tshark_process = subprocess.Popen(  tshark_args, 
                                         stdout=subprocess.PIPE)    
 
     # text2pcap
     text2pcap_args = ['text2pcap', '-l141', '-t', '%s.', '-', args.result]
+    print( "text2pcap: " + str(' '.join(text2pcap_args) ) )
     text2pcap_process = subprocess.Popen(text2pcap_args, 
                                         stdin=subprocess.PIPE)    
     
     try:
-        unbundling(tshark_process, text2pcap_process, {'sll': args.sll, 'ansi': args.ansi})
+        unbundling(tshark_process, text2pcap_process, {'sll': args.sll, 'ansi': args.ansi, 'vlan': args.vlan} )
     except KeyboardInterrupt:
         print 'Interrupted by user'
         sys.exit()
